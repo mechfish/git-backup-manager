@@ -41,7 +41,7 @@ class ProjectName < String
   end
 end
 
-class DropboxBackup
+class Project
   attr_accessor :project, :working_path, :backup_path
 
   def self.get_default_backup_path(default_backup_root, project_name)
@@ -57,8 +57,8 @@ class DropboxBackup
   end
 
   def initialize(opts = {})
-    @working_path = opts[:working_path] || raise("Must provide a working_path option to create a DropboxBackup")
-    raise("Must provide project option to create a DropboxBackup") unless opts[:project]
+    @working_path = opts[:working_path] || raise("Must provide a working_path option to create a Project")
+    raise("Must provide project option to create a Project") unless opts[:project]
     if opts[:project].known?
       @project = opts[:project]
     else
@@ -106,7 +106,7 @@ EOS
   end
 end
 
-class DropboxBackupConfig
+class Controller
   CONFIG_PATH = File.expand_path("../../backup.conf", __FILE__)
 
   attr_accessor :default_backup_root, :backups
@@ -128,7 +128,7 @@ class DropboxBackupConfig
     j = JSON.parse(File.read(path))
     dbc.default_backup_root = j['default_backup_root'] || raise("Cannot find default backup root in config file #{path}")
     dbc.backups = j['to_backup'].map do |b|
-      DropboxBackup.from_hash(b, dbc.default_backup_root)
+      Project.from_hash(b, dbc.default_backup_root)
     end
     dbc
   end
@@ -150,7 +150,7 @@ class DropboxBackupConfig
   end
 
   def add_project(project_name, working_path, backup_path = nil)
-    b = DropboxBackup.new(project: project_name,
+    b = Project.new(project: project_name,
       working_path: working_path, default_backup_root: default_backup_root)
     if includes_project?(b.project)
       return false
@@ -232,26 +232,26 @@ end
 # ----------- MAIN -----------
 
 opts = RuntimeOptions.parse(ARGV)
-config = DropboxBackupConfig.from_file
+controller = Controller.from_file
 
 case opts.action
 when :add then
-  if new_p = config.add_project(opts.project_name, opts.working_path || guess_working_path)
-    config.save
+  if new_p = controller.add_project(opts.project_name, opts.working_path || guess_working_path)
+    controller.save
     puts "Added #{new_p.project} to the list of backups."
   else
     puts "Project name #{opts.project_name} is already being backed up."
   end
 when :list then
-  puts config.to_s
+  puts controller.to_s
 when :remove then
-  if config.remove_project(opts.project_name)
-    config.save
+  if controller.remove_project(opts.project_name)
+    controller.save
     puts "Removed #{opts.project_name}\n"
   else
     puts "Project name #{opts.project_name} not found."
   end
 else
   puts "\n*** Starting Git backup runs at #{Time.now} ***"
-  config.run
+  controller.run
 end
