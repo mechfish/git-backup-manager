@@ -1,0 +1,257 @@
+#!/usr/bin/env ruby
+require 'json'
+require 'optparse'
+require 'ostruct'
+require 'fileutils'
+
+# Represents a project name that isn't known yet
+class UnknownProjectName
+  def known?
+    false
+  end
+
+  # The unknown name cannot equal any other name
+  def ==(other); false; end
+
+  # The unknown name has no value
+  def to_s; nil; end
+end
+
+# Represents a project name
+class ProjectName < String
+  # By default a project name is known
+  def initialize(s)
+    super(s.downcase)
+  end
+
+  def self.create(s)
+    if s && !(s.empty?)
+      new(s)
+    else
+      UnknownProjectName.new
+    end
+  end
+
+  def known?
+    true
+  end
+
+  def self.deduce_from_path(path)
+    ProjectName.new(File.basename(path))
+  end
+end
+
+class DropboxBackup
+  attr_accessor :project, :working_path, :backup_path
+
+  def self.get_default_backup_path(default_backup_root, project_name)
+    unless default_backup_root && default_backup_root.length > 0
+      raise "Must provide a default backup root to compute backup path"
+    end
+    File.join(default_backup_root, "#{project_name}.git.bundle")
+  end
+
+  # Backup paths are required to end in ".git.bundle"
+  def self.proper_backup_path?(path)
+    path && path =~ /\.git\.bundle$/
+  end
+
+  def initialize(opts = {})
+    @working_path = opts[:working_path] || raise("Must provide a working_path option to create a DropboxBackup")
+    raise("Must provide project option to create a DropboxBackup") unless opts[:project]
+    if opts[:project].known?
+      @project = opts[:project]
+    else
+      @project = ProjectName.deduce_from_path(@working_path)
+    end
+    if self.class.proper_backup_path?(opts[:backup_path])
+      @backup_path = opts[:backup_path]
+    else
+      @backup_path = self.class.get_default_backup_path(opts[:default_backup_root], project)
+    end
+  end
+
+  def self.from_hash(j, default_backup_root)
+    self.new(project: ProjectName.new(j['project']),
+      working_path: j['working_path'],
+      default_backup_root: default_backup_root )
+  end
+
+  def to_hash
+    {
+      'project' => @project,
+      'working_path' => @working_path
+    }
+  end
+
+  def to_s
+    <<EOS
+  Project:      #{project}
+  Working Path: #{working_path}
+  Backup Path:  #{backup_path}
+EOS
+  end
+
+  def run
+    FileUtils.cd(working_path) do
+      out = %x{git bundle create #{backup_path} --all}
+      if $? == 0
+        puts "Backed up #{FileUtils.pwd}\n\n"
+      else
+        puts "ERROR backing up #{FileUtils.pwd}: #{$?}\n"
+        puts "STDOUT: #{out}\n\n"
+      end
+    end
+    self
+  end
+end
+
+class DropboxBackupConfig
+  CONFIG_PATH = File.expand_path("../../backup.conf", __FILE__)
+
+  attr_accessor :default_backup_root, :backups
+
+  def initialize
+    @default_backup_root = nil
+    @backups = []
+  end
+
+  def to_json
+    {
+      'default_backup_root' => @default_backup_root,
+      'to_backup' => @backups.map(&:to_hash)
+    }.to_json
+  end
+
+  def self.from_file(path = CONFIG_PATH)
+    dbc = self.new
+    j = JSON.parse(File.read(path))
+    dbc.default_backup_root = j['default_backup_root'] || raise("Cannot find default backup root in config file #{path}")
+    dbc.backups = j['to_backup'].map do |b|
+      DropboxBackup.from_hash(b, dbc.default_backup_root)
+    end
+    dbc
+  end
+
+  def save(path = CONFIG_PATH)
+    File.open(path, "w") { |f| f.puts to_json() }
+  end
+
+  def to_s
+    if backups.empty?
+      "No projects to backup."
+    else
+      "Backing up projects:\n#{backups.map(&:to_s).join("\n")}"
+    end
+  end
+
+  def includes_project?(project_name)
+    !!(backups.find { |b| b.project == project_name.downcase })
+  end
+
+  def add_project(project_name, working_path, backup_path = nil)
+    b = DropboxBackup.new(project: project_name,
+      working_path: working_path, default_backup_root: default_backup_root)
+    if includes_project?(b.project)
+      return false
+    else
+      backups.push(b)
+    end
+    b
+  end
+
+  def remove_project(project_name)
+    return false unless includes_project?(project_name)
+    backups.delete_if { |x| x.project == project_name.downcase }
+    self
+  end
+
+  def run
+    backups.each { |b| b.run }
+  end
+end
+
+class RuntimeOptions < OpenStruct
+  def initialize
+    @action = nil
+    super
+  end
+
+  def action=(new_action)
+    if @action && @action != new_action
+      raise "Cannot specify two actions on the command line."
+    end
+    @action = new_action
+  end
+
+  def action
+    @action
+  end
+
+  def self.parse(args)
+    options = self.new
+
+    OptionParser.new do |opts|
+      opts.banner = "Usage: git_to_dropbox [options]"
+
+      opts.separator "When run with no options, backup all known projects."
+      opts.separator "(by using 'git bundle create')"
+      opts.separator "---"
+      opts.separator "Other actions:"
+
+      opts.on("-a", "--add [PROJECT_NAME]", "Add a new project to be backed up",
+        "All project names must be unique",
+        "if not given, PROJECT_NAME is taken from CWD") do |proj|
+        options.action = :add
+        options.project_name = ProjectName.create(proj)
+      end
+
+      opts.on("-l", "--list", "List the known projects.") do
+        options.action = :list
+      end
+
+      opts.on("-r", "--remove PROJECT_NAME", "Remove a project from the backup list.") do |proj|
+        options.action = :remove
+        options.project_name = ProjectName.create(proj)
+      end
+    end.parse!(args)
+    options
+  end
+end
+
+# Guess that the current working directory is the project working path.
+# If it doesn't have a .git directory, it cannot be, so raise an exception.
+def guess_working_path
+  unless File.directory?(File.join(Dir.pwd, '.git'))
+    raise "Current working directory doesn't seem to be a Git working directory."
+  end
+  Dir.pwd
+end
+
+
+# ----------- MAIN -----------
+
+opts = RuntimeOptions.parse(ARGV)
+config = DropboxBackupConfig.from_file
+
+case opts.action
+when :add then
+  if new_p = config.add_project(opts.project_name, opts.working_path || guess_working_path)
+    config.save
+    puts "Added #{new_p.project} to the list of backups."
+  else
+    puts "Project name #{opts.project_name} is already being backed up."
+  end
+when :list then
+  puts config.to_s
+when :remove then
+  if config.remove_project(opts.project_name)
+    config.save
+    puts "Removed #{opts.project_name}\n"
+  else
+    puts "Project name #{opts.project_name} not found."
+  end
+else
+  puts "\n*** Starting Git backup runs at #{Time.now} ***"
+  config.run
+end
