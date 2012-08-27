@@ -1,4 +1,8 @@
 #!/usr/bin/env ruby
+
+# Run this from crontab with something like this:
+# 0 * * * *       nice -n 19 . /Users/USER/.bashrc; rvm default do ruby git_to_dropbox >> /tmp/backupLog.txt 2>&1
+
 require 'json'
 require 'optparse'
 require 'ostruct'
