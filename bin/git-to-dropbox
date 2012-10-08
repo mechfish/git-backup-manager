@@ -1,7 +1,9 @@
 #!/usr/bin/env ruby
 
+# Copy the backup.conf.example to /Users/USERNAME/.git-to-dropbox.conf
+
 # Run this from crontab with something like this:
-# 0 * * * *       nice -n 19 bash -c '/Users/USERNAME/.rvm/bin/rvm default do ruby /PATH/TO/git_to_dropbox >> /Users/USERNAME/Projects/backupLog.txt 2>&1'
+# 0 * * * *       nice -n 19 bash -c '/Users/USERNAME/.rvm/bin/rvm default do ruby /PATH/TO/git-to-dropbox >> /Users/USERNAME/Projects/backupLog.txt 2>&1'
 
 require 'json'
 require 'optparse'
@@ -196,7 +198,7 @@ class RuntimeOptions < OpenStruct
     options = self.new
 
     OptionParser.new do |opts|
-      opts.banner = "Usage: git_to_dropbox [options]"
+      opts.banner = "Usage: git-to-dropbox [options]"
 
       opts.separator "When run with no options, backup all known projects."
       opts.separator "(by using 'git bundle create')"
