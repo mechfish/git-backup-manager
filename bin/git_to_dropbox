@@ -111,7 +111,7 @@ EOS
 end
 
 class Controller
-  CONFIG_PATH = File.expand_path("../../backup.conf", __FILE__)
+  CONFIG_PATH = File.expand_path("~/.git-to-dropbox.conf")
 
   attr_accessor :default_backup_root, :backups
 
